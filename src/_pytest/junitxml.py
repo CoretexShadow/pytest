@@ -11,10 +11,13 @@ https://github.com/jenkinsci/xunit-plugin/blob/master/src/main/resources/org/jen
 from __future__ import annotations
 
 from collections.abc import Callable
+from collections.abc import Generator
 import functools
 import os
 import platform
 import re
+from typing import Any
+from typing import TYPE_CHECKING
 import xml.etree.ElementTree as ET
 
 from _pytest import nodes
@@ -26,12 +29,22 @@ from _pytest.config import filename_arg
 from _pytest.config.argparsing import Parser
 from _pytest.fixtures import FixtureRequest
 from _pytest.reports import TestReport
+from _pytest.stash import Stash
 from _pytest.stash import StashKey
 from _pytest.terminal import TerminalReporter
 import pytest
 
+# Import to access Package and importtestmodule for suite name resolution
+from _pytest.python import importtestmodule
+from _pytest.python import Package
+
+if TYPE_CHECKING:
+    from _pytest.runner import CallInfo
+    from _pytest.nodes import Item
+
 
 xml_key = StashKey["LogXML"]()
+junit_suite_path_key = StashKey[list[str]]()
 
 
 def bin_xml_escape(arg: object) -> str:
@@ -93,6 +106,7 @@ class _NodeReporter:
         self.properties: list[tuple[str, str]] = []
         self.nodes: list[ET.Element] = []
         self.attrs: dict[str, str] = {}
+        self.suite_path: list[str] = []
 
     def append(self, node: ET.Element) -> None:
         self.xml.add_stats(node.tag)
@@ -130,6 +144,11 @@ class _NodeReporter:
             attrs["url"] = testreport.url
         self.attrs = attrs
         self.attrs.update(existing_attrs)  # Restore any user-defined attributes.
+
+        if hasattr(testreport, "stash"):
+            self.suite_path = testreport.stash.get(junit_suite_path_key, [])
+        else:
+            self.suite_path = []
 
         # Preserve legacy testcase behavior.
         if self.family == "xunit1":
@@ -252,10 +271,16 @@ class _NodeReporter:
 
     def finalize(self) -> None:
         data = self.to_xml()
+        suite_path = self.suite_path
+        duration = self.duration
+        id = self.id
         self.__dict__.clear()
         # Type ignored because mypy doesn't like overriding a method.
         # Also the return value doesn't match...
         self.to_xml = lambda: data  # type: ignore[method-assign]
+        self.suite_path = suite_path
+        self.duration = duration
+        self.id = id
 
 
 def _warn_incompatibility_with_xunit2(
@@ -636,6 +661,37 @@ class LogXML:
     def pytest_sessionstart(self) -> None:
         self.suite_start = timing.Instant()
 
+    @pytest.hookimpl(wrapper=True)
+    def pytest_runtest_makereport(
+        self, item: Item, call: CallInfo[None]
+    ) -> Generator[None, object, TestReport]:
+        report = yield
+        suite_names = []
+        # iter_parents() yields from bottom (parent) to top (root).
+        # We also need to check the item itself.
+        chain = [item] + list(item.iter_parents())
+
+        for node in chain:
+            # Check for pytest_junit_suite_name in the node object (module, class, etc.)
+            obj = getattr(node, "obj", None)
+            if obj is None and isinstance(node, Package):
+                try:
+                    obj = importtestmodule(node.path / "__init__.py", node.config)
+                except Exception:
+                    # If we can't import the __init__.py, just ignore it.
+                    pass
+
+            if obj is not None:
+                name = getattr(obj, "pytest_junit_suite_name", None)
+                if name:
+                    suite_names.append(name)
+
+        if suite_names:
+            if not hasattr(report, "stash"):
+                report.stash = Stash()
+            report.stash[junit_suite_path_key] = list(reversed(suite_names))
+        return report
+
     def pytest_sessionfinish(self) -> None:
         dirname = os.path.dirname(os.path.abspath(self.logfile))
         # exist_ok avoids filesystem race conditions between checking path existence and requesting creation
@@ -644,34 +700,113 @@ class LogXML:
         with open(self.logfile, "w", encoding="utf-8") as logfile:
             duration = self.suite_start.elapsed()
 
-            numtests = (
-                self.stats["passed"]
-                + self.stats["failure"]
-                + self.stats["skipped"]
-                + self.stats["error"]
-                - self.cnt_double_fail_tests
-            )
-            logfile.write('<?xml version="1.0" encoding="utf-8"?>')
+            # stats per suite (tuple path -> stats dict)
+            # stats: errors, failures, skipped, tests, time, seen_nodeids
+            suite_stats: dict[tuple[str, ...], dict[str, Any]] = {}
 
-            suite_node = ET.Element(
+            # Helper to access/create suite stats
+            def get_stats(path: tuple[str, ...]) -> dict[str, Any]:
+                if path not in suite_stats:
+                    suite_stats[path] = {
+                        "errors": 0,
+                        "failures": 0,
+                        "skipped": 0,
+                        "tests": 0,
+                        "time": 0.0,
+                        "seen_nodeids": set(),
+                    }
+                return suite_stats[path]
+
+            # Pre-populate root stats with global stats (adjusted later)
+            # Actually, we should recalculate stats from reporters to be safe with nesting,
+            # but LogXML.stats tracks global counts.
+            # We will aggregate per suite.
+
+            # Map paths to their Element objects
+            suite_elements: dict[tuple[str, ...], ET.Element] = {}
+
+            root_suite = ET.Element(
                 "testsuite",
                 name=self.suite_name,
-                errors=str(self.stats["error"]),
-                failures=str(self.stats["failure"]),
-                skipped=str(self.stats["skipped"]),
-                tests=str(numtests),
+                # These will be updated after processing reporters
+                errors="0",
+                failures="0",
+                skipped="0",
+                tests="0",
                 time=f"{duration.seconds:.3f}",
                 timestamp=self.suite_start.as_utc().astimezone().isoformat(),
                 hostname=platform.node(),
             )
             global_properties = self._get_global_properties_node()
             if global_properties is not None:
-                suite_node.append(global_properties)
+                root_suite.append(global_properties)
+
+            suite_elements[()] = root_suite
+
             for node_reporter in self.node_reporters_ordered:
-                suite_node.append(node_reporter.to_xml())
+                testcase = node_reporter.to_xml()
+                suite_path = tuple(node_reporter.suite_path)
+
+                # Determine outcome for stats
+                # _NodeReporter doesn't store outcome explicitly, but we can check the element
+                is_error = testcase.find("error") is not None
+                is_failure = testcase.find("failure") is not None
+                is_skipped = testcase.find("skipped") is not None
+                # passed if none of the above
+
+                case_duration = node_reporter.duration
+
+                # Ensure path exists
+                current_path: tuple[str, ...] = ()
+                for part in suite_path:
+                    parent_element = suite_elements[current_path]
+                    next_path = current_path + (part,)
+                    if next_path not in suite_elements:
+                        new_suite = ET.Element("testsuite", name=part)
+                        suite_elements[next_path] = new_suite
+                        parent_element.append(new_suite)
+                    current_path = next_path
+
+                # Add testcase to the leaf suite
+                suite_elements[suite_path].append(testcase)
+
+                # Update stats for all suites in path (including root)
+                # Iterate from empty tuple to full path
+                current_path = ()
+                paths_to_update = [()]
+                for part in suite_path:
+                    current_path = current_path + (part,)
+                    paths_to_update.append(current_path)
+
+                for path in paths_to_update:
+                    stats = get_stats(path)
+                    if node_reporter.id not in stats["seen_nodeids"]:  # type: ignore[operator]
+                        stats["tests"] = stats["tests"] + 1  # type: ignore[operator]
+                        stats["seen_nodeids"].add(node_reporter.id)  # type: ignore[operator]
+
+                    stats["time"] = stats["time"] + case_duration  # type: ignore[operator]
+                    if is_error:
+                        stats["errors"] = stats["errors"] + 1  # type: ignore[operator]
+                    elif is_failure:
+                        stats["failures"] = stats["failures"] + 1  # type: ignore[operator]
+                    elif is_skipped:
+                        stats["skipped"] = stats["skipped"] + 1  # type: ignore[operator]
+
+            # Update attributes on all suite elements
+            for path, element in suite_elements.items():
+                stats = get_stats(path)
+                element.set("tests", str(stats["tests"]))
+                element.set("errors", str(stats["errors"]))
+                element.set("failures", str(stats["failures"]))
+                element.set("skipped", str(stats["skipped"]))
+                # For root, we use the session duration, but for nested suites we sum duration
+                if path != ():
+                    element.set("time", f"{stats['time']:.3f}")
+
+            logfile.write('<?xml version="1.0" encoding="utf-8"?>')
             testsuites = ET.Element("testsuites")
             testsuites.set("name", "pytest tests")
-            testsuites.append(suite_node)
+            testsuites.append(root_suite)
             logfile.write(ET.tostring(testsuites, encoding="unicode"))
 
     def pytest_terminal_summary(

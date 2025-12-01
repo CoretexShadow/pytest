@@ -9,6 +9,7 @@ from typing import Any
 from typing import cast
 from typing import TYPE_CHECKING
 from xml.dom import minidom
+import xml.etree.ElementTree as ET
 
 import xmlschema
 
@@ -155,12 +156,14 @@ class TestJunitHelpers:
 
     @pytest.fixture
     def document(self) -> DomDocument:
-        doc = minidom.parseString("""
+        doc = minidom.parseString(
+            """
         <root>
           <item name="a"></item>
           <item name="b"></item>
         </root>
-""")
+"""
+        )
         return DomDocument(doc)
 
     def test_uc_root(self, document: DomDocument) -> None:
@@ -601,28 +604,28 @@ class TestPython:
             systemout_xml = systemout.toxml()
             assert systemout.tag == "system-out", "Expected tag: system-out"
             assert "info msg" not in systemout_xml, "INFO message found in system-out"
-            assert "hello-stdout" in systemout_xml, (
-                "Missing 'hello-stdout' in system-out"
-            )
+            assert (
+                "hello-stdout" in systemout_xml
+            ), "Missing 'hello-stdout' in system-out"
         if junit_logging in ["system-err", "out-err", "all"]:
             systemerr = tnode.get_first_by_tag("system-err")
             systemerr_xml = systemerr.toxml()
             assert systemerr.tag == "system-err", "Expected tag: system-err"
             assert "info msg" not in systemerr_xml, "INFO message found in system-err"
-            assert "hello-stderr" in systemerr_xml, (
-                "Missing 'hello-stderr' in system-err"
-            )
-            assert "warning msg" not in systemerr_xml, (
-                "WARN message found in system-err"
-            )
+            assert (
+                "hello-stderr" in systemerr_xml
+            ), "Missing 'hello-stderr' in system-err"
+            assert (
+                "warning msg" not in systemerr_xml
+            ), "WARN message found in system-err"
         if junit_logging == "no":
             assert not tnode.find_by_tag("log"), "Found unexpected content: log"
-            assert not tnode.find_by_tag("system-out"), (
-                "Found unexpected content: system-out"
-            )
-            assert not tnode.find_by_tag("system-err"), (
-                "Found unexpected content: system-err"
-            )
+            assert not tnode.find_by_tag(
+                "system-out"
+            ), "Found unexpected content: system-out"
+            assert not tnode.find_by_tag(
+                "system-err"
+            ), "Found unexpected content: system-err"
 
     @parametrize_families
     def test_failure_verbose_message(
@@ -866,14 +869,14 @@ class TestPython:
         node = dom.get_first_by_tag("testsuite")
         pnode = node.get_first_by_tag("testcase")
         if junit_logging == "no":
-            assert not node.find_by_tag("system-out"), (
-                "system-out should not be generated"
-            )
+            assert not node.find_by_tag(
+                "system-out"
+            ), "system-out should not be generated"
         if junit_logging == "system-out":
             systemout = pnode.get_first_by_tag("system-out")
-            assert "hello-stdout" in systemout.toxml(), (
-                "'hello-stdout' should be in system-out"
-            )
+            assert (
+                "hello-stdout" in systemout.toxml()
+            ), "'hello-stdout' should be in system-out"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-err"])
     def test_pass_captures_stderr(
@@ -890,14 +893,14 @@ class TestPython:
         node = dom.get_first_by_tag("testsuite")
         pnode = node.get_first_by_tag("testcase")
         if junit_logging == "no":
-            assert not node.find_by_tag("system-err"), (
-                "system-err should not be generated"
-            )
+            assert not node.find_by_tag(
+                "system-err"
+            ), "system-err should not be generated"
         if junit_logging == "system-err":
             systemerr = pnode.get_first_by_tag("system-err")
-            assert "hello-stderr" in systemerr.toxml(), (
-                "'hello-stderr' should be in system-err"
-            )
+            assert (
+                "hello-stderr" in systemerr.toxml()
+            ), "'hello-stderr' should be in system-err"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
     def test_setup_error_captures_stdout(
@@ -919,14 +922,14 @@ class TestPython:
         node = dom.get_first_by_tag("testsuite")
         pnode = node.get_first_by_tag("testcase")
         if junit_logging == "no":
-            assert not node.find_by_tag("system-out"), (
-                "system-out should not be generated"
-            )
+            assert not node.find_by_tag(
+                "system-out"
+            ), "system-out should not be generated"
         if junit_logging == "system-out":
             systemout = pnode.get_first_by_tag("system-out")
-            assert "hello-stdout" in systemout.toxml(), (
-                "'hello-stdout' should be in system-out"
-            )
+            assert (
+                "hello-stdout" in systemout.toxml()
+            ), "'hello-stdout' should be in system-out"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-err"])
     def test_setup_error_captures_stderr(
@@ -949,14 +952,14 @@ class TestPython:
         node = dom.get_first_by_tag("testsuite")
         pnode = node.get_first_by_tag("testcase")
         if junit_logging == "no":
-            assert not node.find_by_tag("system-err"), (
-                "system-err should not be generated"
-            )
+            assert not node.find_by_tag(
+                "system-err"
+            ), "system-err should not be generated"
         if junit_logging == "system-err":
             systemerr = pnode.get_first_by_tag("system-err")
-            assert "hello-stderr" in systemerr.toxml(), (
-                "'hello-stderr' should be in system-err"
-            )
+            assert (
+                "hello-stderr" in systemerr.toxml()
+            ), "'hello-stderr' should be in system-err"
 
     @pytest.mark.parametrize("junit_logging", ["no", "system-out"])
     def test_avoid_double_stdout(
@@ -980,9 +983,9 @@ class TestPython:
         node = dom.get_first_by_tag("testsuite")
         pnode = node.get_first_by_tag("testcase")
         if junit_logging == "no":
-            assert not node.find_by_tag("system-out"), (
-                "system-out should not be generated"
-            )
+            assert not node.find_by_tag(
+                "system-out"
+            ), "system-out should not be generated"
         if junit_logging == "system-out":
             systemout = pnode.get_first_by_tag("system-out")
             assert "hello-stdout call" in systemout.toxml()
@@ -1604,9 +1607,9 @@ def test_url_property(pytester: Pytester) -> None:
 
     test_case = minidom.parse(str(path)).getElementsByTagName("testcase")[0]
 
-    assert test_case.getAttribute("url") == test_url, (
-        "The URL did not get written to the xml"
-    )
+    assert (
+        test_case.getAttribute("url") == test_url
+    ), "The URL did not get written to the xml"
 
 
 @parametrize_families
@@ -1831,3 +1834,131 @@ def test_no_message_quiet(pytester: Pytester) -> None:
 
     result = pytester.runpytest("--junitxml=pytest.xml", "--quiet")
     result.stdout.no_fnmatch_line("* generated xml file: *")
+
+
+def test_junit_nested_suite_structure(pytester):
+    """
+    Verify that tests are grouped into nested testsuite elements
+    based on the suite names provided via pytest_junit_suite_name.
+    """
+    pytester.makepyfile(
+        **{
+            "tests/test_nested.py": """
+                import pytest
+
+                pytest_junit_suite_name = "Root"
+
+                class TestClass:
+                    pytest_junit_suite_name = "Class"
+
+                    def test_one(self):
+                        pass
+
+                def test_root_func():
+                    pass
+            """,
+            "tests/sub/test_deep.py": """
+                import pytest
+                pytest_junit_suite_name = "Deep"
+
+                def test_deep():
+                    pass
+            """,
+        }
+    )
+
+    result = pytester.runpytest("--junitxml=junit.xml")
+    result.assert_outcomes(passed=3)
+
+    tree = ET.parse("junit.xml")
+    root = tree.getroot()
+
+    # Check for "Root" suite
+    root_suite = root.find(".//testsuite[@name='Root']")
+    assert root_suite is not None, "Root suite not found"
+
+    # Check for "Class" suite inside "Root"
+    class_suite = root_suite.find("./testsuite[@name='Class']")
+    assert class_suite is not None, "Class suite not found inside Root"
+
+    # Check test_one inside Class suite
+    test_one = class_suite.find("./testcase[@name='test_one']")
+    assert test_one is not None, "test_one not found inside Class suite"
+
+    # Check test_root_func inside Root suite
+    test_root = root_suite.find("./testcase[@name='test_root_func']")
+    assert test_root is not None, "test_root_func not found inside Root suite"
+
+    # Check Deep suite (should be under main root, not inside Root)
+    deep_suite = root.find(".//testsuite[@name='Deep']")
+    assert deep_suite is not None, "Deep suite not found"
+
+    # Check test_deep inside Deep suite
+    test_deep = deep_suite.find("./testcase[@name='test_deep']")
+    assert test_deep is not None, "test_deep not found inside Deep suite"
+
+
+def test_junit_nested_suite_from_init(pytester):
+    """
+    Verify that suite name defined in __init__.py applies to contained modules.
+    """
+    pytester.makepyfile(
+        **{
+            "pkg/__init__.py": "pytest_junit_suite_name = 'Package'",
+            "pkg/test_pkg.py": """
+                def test_pkg_one():
+                    pass
+            """,
+        }
+    )
+
+    result = pytester.runpytest("--junitxml=pkg.xml")
+    result.assert_outcomes(passed=1)
+
+    tree = ET.parse("pkg.xml")
+    root = tree.getroot()
+
+    # Expect:
+    # <testsuite name="pytest">
+    #   <testsuite name="Package">
+    #     <testcase name="test_pkg_one">
+
+    pkg_suite = root.find(".//testsuite[@name='Package']")
+    assert pkg_suite is not None, "Package suite not found"
+
+    tc = pkg_suite.find("./testcase[@name='test_pkg_one']")
+    assert tc is not None, "test_pkg_one not found inside Package suite"
+
+
+def test_junit_legacy_flat(pytester):
+    """
+    Verify backward compatibility: no pytest_junit_suite_name means flat structure (under root).
+    """
+    pytester.makepyfile(
+        """
+        def test_flat():
+            pass
+    """
+    )
+
+    result = pytester.runpytest("--junitxml=flat.xml")
+    result.assert_outcomes(passed=1)
+
+    tree = ET.parse("flat.xml")
+    root = tree.getroot()
+
+    # Expect:
+    # <testsuites>
+    #   <testsuite name="pytest">
+    #     <testcase name="test_flat">
+
+    # Check for root testsuite
+    root_suite = root.find("testsuite")
+    assert root_suite is not None, "Root testsuite not found"
+
+    # Should NOT have other testsuites (except root)
+    child_suites = root_suite.findall("testsuite")
+    assert len(child_suites) == 0, "Found unexpected nested suites in legacy mode"
+
+    tc = root_suite.find("testcase[@name='test_flat']")
+    assert tc is not None, "test_flat not found in root suite"

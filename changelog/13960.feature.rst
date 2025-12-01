@@ -1,0 +1,1 @@
+Allow ``pytest_junit_suite_name`` to be set on any grouping of tests and in a nested manner.
